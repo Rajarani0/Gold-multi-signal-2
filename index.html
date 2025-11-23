@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GOLD PRO V8 - XAUUSD</title>
+    <link rel="manifest" href="data:application/manifest+json,{
+        'name': 'GOLD PRO V8',
+        'short_name': 'GoldPro',
+        'start_url': '.',
+        'display': 'standalone',
+        'background_color': '#000',
+        'theme_color': '#FFD700',
+        'icons': [{'src': 'data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2280%22>Gold</text></svg>', 'sizes': 'any'}]
+    }">
+    <style>
+        *{margin:0;padding:0;box-sizing:border-box;font-family:'Segoe UI',sans-serif;}
+        body{background:#000;color:#fff;min-height:100vh;padding:15px;text-align:center;background:linear-gradient(135deg,#111,#000);}
+        h1{color:#FFD700;font-size:2.5rem;margin:20px 0;text-shadow:0 0 20px #FFD700;}
+        .config{background:rgba(255,215,0,0.1);padding:20px;border-radius:15px;max-width:420px;margin:20px auto;border:1px solid #FFD700;}
+        input, button{width:100%;padding:14px;margin:8px 0;border-radius:10px;font-size:1rem;}
+        input{background:#222;color:#fff;border:1px solid #555;}
+        input::placeholder{color:#aaa;}
+        .btn-main{background:#FFD700;color:#000;font-weight:bold;border:none;cursor:pointer;}
+        .btn-main:hover{background:#ffed4e;transform:scale(1.02);}
+        .btn-stop{background:#ff4444;}
+        .container{background:rgba(255,255,255,0.05);padding:25px;border-radius:20px;max-width:420px;margin:20px auto;border:2px solid #333;}
+        #price{font-size:3.2rem;color:#0f0;text-shadow:0 0 15px #0f0;margin:15px 0;}
+        #signal{font-size:1.3rem;padding:18px;border-radius:15px;min-height:70px;font-weight:bold;margin:15px 0;}
+        .strong-buy{background:#0f300f;color:#0f0;border:3px solid #0f0;animation:glow 1.5s infinite;}
+        .strong-sell{background:#300f0f;color:#f00;border:3px solid #f00;animation:glow 1.5s infinite;}
+        .neutral{background:#333;color:#ff0;}
+        .error{background:#ff4444;color:#fff;border:2px solid #f00;}
+        @keyframes glow{0%,100%{box-shadow:0 0 10px;}50%{box-shadow:0 0 30px;}}
+        #indicators{background:rgba(255,215,0,0.1);padding:15px;border-radius:12px;margin:15px 0;font-size:0.95rem;line-height:1.9;}
+        .footer{margin-top:50px;color:#888;font-size:0.9rem;}
+        .hide{display:none;}
+        #debug {color:#ff0; font-size:0.8rem; margin:10px; padding:10px; background:#222; border-radius:5px;}
+    </style>
+</head>
+<body>
+
+    <!-- CONFIG BOX – Privacy 100% -->
+    <div id="configBox" class="config">
+        <h2 style="color:#FFD700;margin-bottom:15px;">Enter Your Private Details</h2>
+        <input type="password" id="apiKey" placeholder="TwelveData API Key" autocomplete="off">
+        <input type="password" id="botToken" placeholder="Telegram Bot Token (12345:ABC...)" autocomplete="off">
+        <input type="text" id="chatIds" placeholder="Chat IDs (e.g. 123456789, -1001234567890)" autocomplete="off">
+        <button class="btn-main" onclick="saveAndStart()">START BOT</button>
+        <div id="debug"></div>
+    </div>
+
+    <!-- MAIN BOT UI (config ke baad dikhega) -->
+    <div id="mainUI" class="hide">
+        <h1>GOLD PRO V8</h1>
+        <div class="container">
+            <div id="price">Connecting...</div>
+            <div id="indicators">Loading 8 Indicators + FVG...</div>
+            <div id="signal" class="neutral">Press START to begin</div>
+            <button class="btn-main" id="startBtn">START BOT</button>
+            <button class="btn-main btn-stop" id="stopBtn" disabled>STOP BOT</button>
+            <br><br>
+            <button class="btn-main" onclick="showConfigAgain()" style="background:#666;font-size:0.9rem;padding:10px;">Change API / Settings</button>
+            <div id="debug"></div>
+        </div>
+        <div class="footer">8 Indicators • FVG Detection • 6/8 Confirmation • 5 Min Cooldown • Privacy 100%</div>
+    </div>
+
+<script>
+        let API_KEY = "", BOT_TOKEN = "", CHAT_IDS = [];
+        let intervalId = null, quoteId = null;
+        let lastSignal = 0;
+        const COOLDOWN = 5 * 60 * 1000;
+        const symbol = "XAU/USD";
+        const coin = { name: "GOLD", tp: 50, sl: 25 };
+
+        function logDebug(msg, isError = false) {
+            const debugEl = document.getElementById('debug');
+            debugEl.innerHTML = msg;
+            debugEl.style.color = isError ? '#f00' : '#0f0';
+            console.log(msg); // Browser console mein bhi dikhega
+        }
+
+        async function testAPI() {
+            if (!API_KEY) return false;
+            try {
+                logDebug('Testing API...');
+                const res = await fetch(`https://api.twelvedata.com/quote?symbol=\( {symbol}&apikey= \){API_KEY}`);
+                const data = await res.json();
+                if (data.status === 'ok' && data.close) {
+                    logDebug('API Test: SUCCESS! Price loaded.');
+                    return true;
+                } else {
+                    logDebug('API Test: FAILED! Response: ' + JSON.stringify(data), true);
+                    return false;
+                }
+            } catch (e) {
+                logDebug('API Test: ERROR - ' + e.message, true);
+                return false;
+            }
+        }
+
+        function saveAndStart() {
+            API_KEY = document.getElementById("apiKey").value.trim();
+            BOT_TOKEN = document.getElementById("botToken").value.trim();
+            const ids = document.getElementById("chatIds").value.trim();
+            CHAT_IDS = ids ? ids.split(",").map(x => x.trim()) : [];
+
+            if (!API_KEY || !BOT_TOKEN || CHAT_IDS.length === 0) {
+                logDebug('Fill all fields!', true);
+                alert("Sab fields bharo bhai!");
+                return;
+            }
+
+            // API test karo pehle
+            testAPI().then(success => {
+                if (success) {
+                    document.getElementById("configBox").classList.add("hide");
+                    document.getElementById("mainUI").classList.remove("hide");
+                    logDebug('Settings saved. Ready to start!');
+                } else {
+                    alert('API key test fail ho gaya. Check karo key sahi hai?');
+                }
+            });
+        }
+
+        function showConfigAgain() {
+            document.getElementById("mainUI").classList.add("hide");
+            document.getElementById("configBox").classList.remove("hide");
+            stopBot();
+            logDebug('Settings reset.');
+        }
+
+        async function updatePrice() {
+            if (!API_KEY) return;
+            try {
+                const res = await fetch(`https://api.twelvedata.com/quote?symbol=\( {symbol}&apikey= \){API_KEY}`);
+                const d = await res.json();
+                if (d.status === 'ok' && d.close) {
+                    document.getElementById("price").innerHTML = `<span style="color:#0f0;">GOLD: \[ {parseFloat(d.close).toFixed(2)}</span>`;
+                    logDebug('Price updated: $' + d.close);
+                } else {
+                    logDebug('Price fetch failed: ' + JSON.stringify(d), true);
+                }
+            } catch(e) {
+                logDebug('Price error: ' + e.message, true);
+            }
+        }
+
+        async function fetchAndCheck() {
+            if (!API_KEY) return;
+            try {
+                logDebug('Fetching candles...');
+                const res = await fetch(`https://api.twelvedata.com/time_series?symbol=\( {symbol}&interval=1min&outputsize=300&apikey= \){API_KEY}`);
+                const data = await res.json();
+                if (data.status === 'ok' && data.values) {
+                    const candles = data.values.map(c => ({
+                        open: +c.open, high: +c.high, low: +c.low, close: +c.close, volume: +(c.volume||0)
+                    })).reverse(); // TwelveData oldest first deta hai, reverse karo
+                    checkStrategy(candles);
+                    logDebug('Candles loaded: ' + candles.length + ' bars');
+                } else {
+                    logDebug('Candles fetch failed: ' + JSON.stringify(data), true);
+                }
+            } catch(e) {
+                logDebug('Fetch error: ' + e.message, true);
+            }
+        }
+
+        async function sendTelegram(msg) {
+            for (const id of CHAT_IDS) {
+                try {
+                    const res = await fetch(`https://api.telegram.org/bot\( {BOT_TOKEN}/sendMessage?chat_id= \){id}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`);
+                    const d = await res.json();
+                    if (d.ok) {
+                        logDebug('Signal sent to ' + id);
+                    } else {
+                        logDebug('Telegram failed for ' + id + ': ' + JSON.stringify(d), true);
+                    }
+                } catch(e) {
+                    logDebug('Telegram error: ' + e.message, true);
+                }
+            }
+        }
+
+        function checkStrategy(candles) {
+            if (candles.length < 100) {
+                logDebug('Not enough data: ' + candles.length, true);
+                return;
+            }
+            const c = candles.map(x=>x.close), h=candles.map(x=>x.high), l=candles.map(x=>x.low), v=candles.map(x=>x.volume);
+            const price = c[c.length-1].toFixed(2);
+
+            let buy=0, sell=0, rBuy=[], rSell=[];
+
+            // Indicators (same as before)
+            const rsi = calcRSI(c,14);
+            rsi<32 && (buy++, rBuy.push(`RSI ${rsi.toFixed(1)}`));
+            rsi>68 && (sell++, rSell.push(`RSI ${rsi.toFixed(1)}`));
+
+            const macd = calcMACD(c);
+            macd.line>macd.signal && macd.hist>0 && (buy++, rBuy.push("MACD Bull"));
+            macd.line<macd.signal && macd.hist<0 && (sell++, rSell.push("MACD Bear"));
+
+            const bb = calcBB(c,20,2);
+            c[c.length-1]>bb.upper && (buy++, rBuy.push("BB Up"));
+            c[c.length-1]<bb.lower && (sell++, rSell.push("BB Down"));
+
+            const stoch = calcStoch(h,l,c,14);
+            stoch.k<25 && (buy++, rBuy.push(`Stoch ${stoch.k.toFixed(1)}`));
+            stoch.k>75 && (sell++, rSell.push(`Stoch ${stoch.k.toFixed(1)}`));
+
+            const ema50 = calcEMA(c,50), ema200 = calcEMA(c,200);
+            ema50>ema200 && (buy++, rBuy.push("EMA Bull"));
+            ema50<ema200 && (sell++, rSell.push("EMA Bear"));
+
+            c[c.length-1]>ema50 && ema50>ema200 && (buy++, rBuy.push("Trend Up"));
+            c[c.length-1]<ema50 && ema50<ema200 && (sell++, rSell.push("Trend Down"));
+
+            const avgVol = v.slice(-50).reduce((a,b)=>a+b,0)/50;
+            v[v.length-1]>avgVol*1.8 && (c[c.length-1]>c[c.length-2]? (buy++, rBuy.push("Vol+")) : (sell++, rSell.push("Vol-")));
+
+            const fvg = detectFVG(candles);
+            fvg==='bull' && (buy++, rBuy.push("FVG Bull"));
+            fvg==='bear' && (sell++, rSell.push("FVG Bear"));
+
+            document.getElementById("indicators").innerHTML = `BUY: \( {buy}/8 | SELL: \){sell}/8<br>RSI \( {rsi.toFixed(1)} • Stoch \){stoch.k.toFixed(1)} • FVG ${fvg.toUpperCase()}`;
+
+            const now = Date.now();
+            const sig = document.getElementById("signal");
+
+            if(buy>=6 && now-lastSignal>COOLDOWN){
+                const tp = (parseFloat(price)+50).toFixed(2), sl = (parseFloat(price)-25).toFixed(2);
+                const msg = `*GOLD BUY SIGNAL*\nEntry: \]{price}\nTP: \[ {tp} (+50)\nSL: \]{sl} (-25)\nRR: 1:2\nScore: \( {buy}/8\n \){rBuy.join(" • ")}`;
+                sendTelegram(msg);
+                sig.innerHTML = `<div class="strong-buy">BUY SIGNAL SENT! (${buy}/8)</div>`;
+                lastSignal = now;
+                logDebug('BUY SIGNAL FIRED!');
+            }
+            else if(sell>=6 && now-lastSignal>COOLDOWN){
+                const tp = (parseFloat(price)-50).toFixed(2), sl = (parseFloat(price)+25).toFixed(2);
+                const msg = `*GOLD SELL SIGNAL*\nEntry: \[ {price}\nTP: \]{tp} (-50)\nSL: $${sl} (+25)\nRR: 1:2\nScore: \( {sell}/8\n \){rSell.join(" • ")}`;
+                sendTelegram(msg);
+                sig.innerHTML = `<div class="strong-sell">SELL SIGNAL SENT! (${sell}/8)</div>`;
+                lastSignal = now;
+                logDebug('SELL SIGNAL FIRED!');
+            }
+            else sig.innerHTML = `<div class="neutral">BUY \( {buy}/8 | SELL \){sell}/8 – Waiting...</div>`;
+        }
+
+        // Indicator functions
+        const calcRSI=(c,p)=>{let g=0,l=0;for(let i=c.length-p;i<c.length;i++){let d=c[i]-c[i-1];d>0?g+=d:l-=d;}return 100-(100/(1+g/(l||1)));};
+        const calcMACD=(c)=>{let e12=calcEMA(c,12),e26=calcEMA(c,26),line=e12-e26,prev=calcEMA(c.slice(0,-1),12)-calcEMA(c.slice(0,-1),26);return{line,signal:0,hist:line-prev};};
+        const calcBB=(c,p,s)=>{let sma=c.slice(-p).reduce((a,b)=>a+b,0)/p,dev=Math.sqrt(c.slice(-p).reduce((a,b)=>a+Math.pow(b-sma,2),0)/p);return{upper:sma+s*dev,lower:sma-s*dev};};
+        const calcStoch=(h,l,c,p)=>{let rh=Math.max(...h.slice(-p)),rl=Math.min(...l.slice(-p)),k=((c[c.length-1]-rl)/(rh-rl||1))*100;return{k:isNaN(k)?50:k};};
+        const calcEMA=(c,p)=>{let k=2/(p+1),ema=c[0];for(let i=1;i<c.length;i++)ema=c[i]*k+ema*(1-k);return ema;};
+        const detectFVG=(candles)=>{if(candles.length<3)return"none";const n=candles.length-1;if(candles[n-2].high < candles[n].low)return"bull";if(candles[n-2].low > candles[n].high)return"bear";return"none";};
+
+        // Start & Stop
+        document.getElementById("startBtn").onclick = () => {
+            logDebug('Starting bot...');
+            updatePrice();
+            fetchAndCheck();
+            intervalId = setInterval(fetchAndCheck, 60000);
+            quoteId = setInterval(updatePrice, 10000);
+            document.getElementById("startBtn").disabled = true;
+            document.getElementById("stopBtn").disabled = false;
+            logDebug('Bot started! Checking every minute.');
+        };
+        function stopBot() {
+            clearInterval(intervalId); clearInterval(quoteId);
+            document.getElementById("startBtn").disabled = false;
+            document.getElementById("stopBtn").disabled = true;
+            logDebug('Bot stopped.');
+        }
+        document.getElementById("stopBtn").onclick = stopBot;
+
+        // Page load pe debug
+        logDebug('Page loaded. Enter settings to start.');
+    </script>
+</body>
+</html>
